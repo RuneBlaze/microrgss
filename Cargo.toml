@@ -1,0 +1,13 @@
+[package]
+name = "rgss-rust"
+version = "0.1.0"
+authors = ["RuneBlaze <runeblaze@excite.co.jp>"]
+
+[dependencies]
+ggez = "0.4"
+image = "*"
+mrusty = "*"
+
+[patch.crates-io]
+app_dirs = { git = "https://github.com/koute/app-dirs-rs" }
+
