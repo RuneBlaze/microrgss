@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 use std::cell::RefCell;
 use mrusty::{Mruby, MrubyImpl};
 use std::rc::Rc;
+use std::fs::File;
 use std::collections::BinaryHeap;
 use ggez::*;
 use ggez::event::Mod;
@@ -26,7 +27,6 @@ use std::collections::HashMap;
 struct MainState {
     pos_x: f32,
     // sprite: Sprite,
-    input: Input,
     // graphics: Graphics,
     mruby: Rc<RefCell<Mruby>>,
 }
@@ -61,8 +61,9 @@ impl Graphics {
         Graphics{sprites: Vec::new()}
     }
 
-    fn reg (&mut self, sprite : Rc<RefCell<Sprite>>) {
-        self.sprites.push(sprite);
+    fn reg (&mut self, sprite : Rc<RefCell<Sprite>>) -> Rc<RefCell<Sprite>> {
+        self.sprites.push(sprite.clone());
+        sprite
     }
 
     fn update(&mut self, ctx : &mut Context) {
@@ -94,7 +95,7 @@ struct Pixel {
     a: u8,
 }
 
-fn packRgba8(r : u8, g : u8, b : u8, a : u8) -> Pixel {
+fn pack_rgba8(r : u8, g : u8, b : u8, a : u8) -> Pixel {
     return Pixel{r: r, g : g, b : b , a : a};
 }
 
@@ -105,7 +106,7 @@ impl Bitmap {
 
     fn get_pixel(&self, x : u32, y : u32) -> Pixel {
         let i = self.injection(x, y) as usize;
-        return packRgba8(self.raw[i],self.raw[i+1],self.raw[i+2],self.raw[i+3]);
+        return pack_rgba8(self.raw[i],self.raw[i+1],self.raw[i+2],self.raw[i+3]);
     }
 
     fn set_pixel(&mut self, x : u32, y : u32, c : Pixel) {
@@ -136,14 +137,14 @@ impl Bitmap {
         let mem = image::open(np).unwrap();
         let img = mem.to_rgba();
         let (width, height) = img.dimensions();
-        println!("width: {}, height: {}, len: {} <-> {}", width, height, mem.raw_pixels().len(), width * height * 4);
+        // println!("width: {}, height: {}, len: {} <-> {}", width, height, mem.raw_pixels().len(), width * height * 4);
         Bitmap {  raw: img.into_raw(), width: width, height: height, dirty: true}
     }
 }
 
 
 struct Sprite {
-    bitmap: Option<Rc<Bitmap>>,
+    bitmap: Option<Rc<RefCell<Bitmap>>>,
     image: Option<Image>,
     pos : Point2,
     z : i32,
@@ -171,9 +172,6 @@ impl Ord for Sprite {
     }
 }
 
-
-
-
 mrusty_class!(Pixel, "Color", {
     def!("initialize", |r: i32, g: i32, b: i32, a: i32| {
         Pixel{r:r as u8, g: g as u8, b: b as u8, a: a as u8}
@@ -196,40 +194,157 @@ mrusty_class!(Pixel, "Color", {
     });
 });
 
-mrusty_class!(Bitmap, "Bitmap", {
-    def!("initialize", |w: i32, h: i32| {
-        Bitmap::new(w as u32, h as u32)
+// mrusty_class!(Bitmap, "Bitmap", {
+//     def!("initialize", |w: i32, h: i32| {
+//         Bitmap::new(w as u32, h as u32)
+//     });
+// });
+
+
+struct SpriteLike {
+    sprite: Rc<RefCell<Sprite>>
+}
+
+struct BitmapLike {
+    bitmap: Rc<RefCell<Bitmap>>
+}
+
+impl BitmapLike {
+    fn get_pixel(&self, x : i32, y : i32) -> Pixel {
+        self.bitmap.borrow().get_pixel(x as u32,y as u32)
+    }
+
+    fn set_pixel(&self, x : i32, y : i32, p : Pixel) {
+        self.bitmap.borrow_mut().set_pixel(x as u32,y as u32, p)
+    }
+
+    fn fill_rect(&self, x : i32, y : i32, width: i32, height: i32, p : Pixel) {
+        for j in (y..(y + height)) {
+            for i in x..(x + width) {
+                self.set_pixel(i, j, p)
+            }
+        }
+    }
+}
+
+impl SpriteLike {
+    fn new(sprite: Rc<RefCell<Sprite>>) -> SpriteLike {
+        SpriteLike{ sprite: sprite }
+    }
+
+    fn bitmaplike(&self) -> Option<BitmapLike> {
+        let ns = self.sprite.clone();
+        let bs = ns.borrow();
+        if let Some(ref bm) = bs.bitmap {
+            Some(BitmapLike {bitmap: bm.clone() })
+        } else {
+            None
+        }
+    }
+
+    fn set_bitmaplike(&self, bm : &BitmapLike) {
+        let ns = &self.sprite;
+        let mut bs = ns.borrow_mut();
+        let mut nb = bm.bitmap.clone();
+        bs.bitmap = Some(nb);
+    }
+}
+
+/*
+def!("create", |mruby, slf: (&mut Graphics)| {
+        let s = Rc::new(RefCell::new(Sprite::from_bitmap(Bitmap::from_path("lbq_sound.png"))));
+        slf.reg(s.clone());
+        mruby.obj(SpriteLike::new(s))
+    });
+*/
+
+fn symbol2keycode (k : &str) -> Option<Keycode> {
+    match k.to_lowercase().as_ref() {
+        "up" => Some(Keycode::Up),
+        "left" => Some(Keycode::Left),
+        "right" => Some(Keycode::Right),
+        "down" => Some(Keycode::Down),
+        _ => None
+    }
+}
+
+
+mrusty_class!(Input, "InputType", {
+    def!("trigger?", |mruby, slf: (&Input), k : Value| {
+        if let Some(kc) = symbol2keycode(k.to_str().unwrap()) {
+            return mruby.bool(slf.trigger(kc));
+        } else {
+            return mruby.bool(false);
+        }
+    });
+
+    def!("press?", |mruby, slf: (&Input), k : Value| {
+        if let Some(kc) = symbol2keycode(k.to_str().unwrap()) {
+            return mruby.bool(slf.press(kc));
+        } else {
+            return mruby.bool(false);
+        }
     });
 });
 
-
-
-mrusty_class!(Sprite, "Sprite", {
-    def!("initialize", || {
-        Sprite::new()
+mrusty_class!(SpriteLike, "Sprite", {
+    def!("initialize", |mruby, pth: Value| {
+        let s = Rc::new(RefCell::new(Sprite::from_bitmap(Bitmap::from_path(pth.to_str().unwrap()))));
+        let graphics = mruby.run("RGSS::Graphics").unwrap().to_obj::<Graphics>().unwrap();
+        graphics.borrow_mut().reg(s.clone());
+        SpriteLike::new(s)
     });
 
-    def!("x", |mruby, slf: (&Sprite)| {
-        mruby.fixnum(slf.pos[0] as i32)
+    def!("x", |mruby, slf: (&SpriteLike)| {
+        let n = slf.sprite.borrow().pos[0];
+        mruby.fixnum(n as i32)
     });
 
-    def!("y", |mruby, slf: (&Sprite)| {
-        mruby.fixnum(slf.pos[1] as i32)
+    def!("y", |mruby, slf: (&SpriteLike)| {
+        let n = slf.sprite.borrow().pos[1];
+        mruby.fixnum(n as i32)
     });
 
-    def!("x=", |mruby, slf: (&mut Sprite), x : i32| {
-        slf.pos[0] = x as f32;
+    def!("x=", |mruby, slf: (&mut SpriteLike), x : i32| {
+        slf.sprite.borrow_mut().pos[0] = x as f32;
         mruby.fixnum(x)
     });
 
-    def!("y=", |mruby, slf: (&mut Sprite), y : i32| {
-        slf.pos[0] = y as f32;
+    def!("y=", |mruby, slf: (&mut SpriteLike), y : i32| {
+        slf.sprite.borrow_mut().pos[1] = y as f32;
         mruby.fixnum(y)
     });
 
-    def!("z=", |mruby, slf: (&mut Sprite), z : i32| {
-        slf.z = z;
-        mruby.fixnum(z)
+    def!("bitmap", |mruby, slf: (&mut SpriteLike)| {
+        mruby.option(slf.bitmaplike())
+    });
+
+    def!("bitmap=", |mruby, slf: (&mut SpriteLike), v : (&BitmapLike)| {
+        slf.set_bitmaplike(&*v);
+        mruby.nil()
+    });
+});
+
+mrusty_class!(BitmapLike, "Bitmap", {
+    def!("initialize", |mruby, width: i32, height: i32| {
+        BitmapLike{ bitmap: Rc::new(RefCell::new(Bitmap::new(width as u32, height as u32))) }
+    });
+
+    def!("get_pixel", |mruby, slf: (&mut BitmapLike), x: i32, y: i32| {
+        mruby.obj(slf.get_pixel(x, y))
+    });
+
+    def!("set_pixel", |mruby, slf: (&mut BitmapLike), x: i32, y: i32, p : Value| {
+        let p_ = p.to_obj::<Pixel>().unwrap();
+        slf.set_pixel(x, y, p_.borrow().clone());
+        mruby.nil()
+    });
+
+    def!("fill_rect", |mruby, slf: (&mut BitmapLike), x: i32, y: i32, width: i32, height: i32, p : Value| {
+        let p_ = p.to_obj::<Pixel>().unwrap();
+        let px = p_.borrow().clone();
+        slf.fill_rect(x, y, width, height, px);
+        mruby.nil()
     });
 });
 
@@ -237,9 +352,8 @@ mrusty_class!(Sprite, "Sprite", {
 mrusty_class!(Graphics, "Graphics", {
     def!("create", |mruby, slf: (&mut Graphics)| {
         let s = Rc::new(RefCell::new(Sprite::from_bitmap(Bitmap::from_path("lbq_sound.png"))));
-        let v = &s;
-        slf.reg(s);
-        &s
+        slf.reg(s.clone());
+        mruby.obj(SpriteLike::new(s))
     });
 });
 
@@ -253,16 +367,17 @@ impl Sprite {
 
     fn from_bitmap(bitmap : Bitmap) -> Sprite {
         let mut sp = Sprite::new();
-        sp.bitmap = Some(Rc::new(bitmap));
+        sp.bitmap = Some(Rc::new(RefCell::new(bitmap)));
         return sp;
     }
 
     fn predraw(&mut self, context: &mut Context) {
-        if let Some(ref mut bitmap) = self.bitmap {
+        if let Some(ref _bitmap) = self.bitmap {
+            let mut bitmap = _bitmap.borrow_mut();
             if bitmap.dirty {
                 let image = Image::from_rgba8(context, bitmap.width as u16, bitmap.height as u16, &bitmap.raw);
                 self.image = Some(image.unwrap());
-                Rc::get_mut(bitmap).unwrap().dirty = false;
+                bitmap.dirty = false;
             }
         }
     }
@@ -277,7 +392,7 @@ impl Sprite {
 
     fn width(&self) -> u32 {
         if let Some(ref bitmap) = self.bitmap {
-            return bitmap.width;
+            return bitmap.borrow().width;
         } else {
             panic!("")
         }
@@ -285,7 +400,7 @@ impl Sprite {
 
     fn height(&self) -> u32 {
         if let Some(ref bitmap) = self.bitmap {
-            return bitmap.height;
+            return bitmap.borrow().height;
         } else {
             panic!("")
         }
@@ -308,16 +423,18 @@ impl MainState  {
         assert!(mruby.is_defined("Graphics"));
         let mut graphics = Graphics::new();
         rgss.def_const("Graphics", mruby.obj(graphics));
+        rgss.def_const("Input", mruby.obj(Input::new()));
         mruby.run("load()").unwrap();
         // let s = Sprite::from_bitmap(Bitmap::from_path("lbq_sound.png"));
         // graphics.reg(s);
-        let s = MainState { pos_x: 0.0, input : Input::new(), mruby: mruby};
+        let s = MainState { pos_x: 0.0, mruby: mruby};
         Ok(s)
     }
 }
 
 impl event::EventHandler for MainState {
     fn update(&mut self, _ctx: &mut Context) -> GameResult<()> {
+        let rgss = self.mruby.get_module("RGSS").unwrap();
         self.mruby.run("update()").unwrap();
         self.pos_x = self.pos_x % 800.0 + 1.0;
         // if self.input.trigger(Keycode::Right) {
@@ -330,7 +447,10 @@ impl event::EventHandler for MainState {
         graphics.borrow_mut().update(_ctx);
 
 
-        self.input.trigger = HashMap::new();
+        // self.input.trigger = HashMap::new();
+        let input = self.mruby.run("RGSS::Input").unwrap().to_obj::<Input>().unwrap();
+        input.borrow_mut().trigger = HashMap::new();
+        // rgss.def_const("Input", self.mruby.obj(Input::new()));
         Ok(())
     }
 
@@ -352,12 +472,14 @@ impl event::EventHandler for MainState {
     }
 
     fn key_down_event(&mut self, _ctx: &mut Context, keycode: Keycode, _: Mod, _: bool) {
-        self.input.press.insert(keycode, true);
+        let input = self.mruby.run("RGSS::Input").unwrap().to_obj::<Input>().unwrap();
+        input.borrow_mut().press.insert(keycode, true);
     }
 
     fn key_up_event(&mut self, _ctx: &mut Context, keycode: Keycode, _: Mod, _: bool) {
-        self.input.trigger.insert(keycode, true);
-        self.input.press.insert(keycode, false);
+        let input = self.mruby.run("RGSS::Input").unwrap().to_obj::<Input>().unwrap();
+        input.borrow_mut().trigger.insert(keycode, true);
+        input.borrow_mut().press.insert(keycode, false);
     }
 }
 
@@ -367,31 +489,31 @@ impl event::EventHandler for MainState {
 pub fn main() {
     let mruby = Mruby::new();
     mruby.def_file::<Pixel>("color");
-    mruby.def_file::<Sprite>("sprite");
     mruby.def_file::<Graphics>("graphics");
+    mruby.def_file::<SpriteLike>("sprite");
+    mruby.def_file::<BitmapLike>("bitmap");
+    mruby.def_file::<Input>("input");
 
-    mruby.def_method_for::<Graphics, _>("create", mrfn!(|mruby, slf: Value, ))
     mruby.def_module("RGSS");
     let rgss = mruby.get_module("RGSS").unwrap();
 
 
     let result = mruby.run("
         require 'color'
+        require 'bitmap'
         require 'sprite'
         require 'graphics'
-
-        Color.new(255,255,255,140).a
-
-        def load
-            s = Sprite.new
-            RGSS::Graphics.reg(s)
-        end
-
-        def update
-        end
+        require 'input'
     ").unwrap();
 
-    // println!("mrb: {}", result.to_i32().unwrap());
+    let mut f = File::open("main.rb").expect("file not found");
+
+    let mut contents = String::new();
+    f.read_to_string(&mut contents)
+        .expect("something went wrong reading the file");
+    println!("μrgss running");
+    println!("{}", contents);
+    mruby.run(contents.as_ref()).unwrap();
 
     let c = conf::Conf::new();
     let ctx = &mut Context::load_from_conf("super_simple", "ggez", c).unwrap();
