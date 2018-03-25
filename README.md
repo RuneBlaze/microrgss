@@ -10,7 +10,7 @@ It is mostly just for trying out Rust.
 
 It runs the following snippet just fine:
 
-```rust
+```ruby
 # microrgss
 def load
     $s = Sprite.new('lbq_sound.png')
@@ -31,7 +31,7 @@ end
 
 ## Running
 
-```
+```bash
 cargo build
 cargo run
 ```
