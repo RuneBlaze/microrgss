@@ -1,4 +1,6 @@
 # microrgss
+
+
 def load
     $s = Sprite.new('lbq_sound.png')
     b = Bitmap.new(200, 100);
